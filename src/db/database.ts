@@ -1,6 +1,4 @@
-import { openDB, type IDBPDatabase } from 'idb';
 import type { Category, Contribution } from '../types';
-import type { InvestDB } from './schema';
 
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: 'renda_fixa',    label: 'Renda Fixa',        targetPct: 0.30, currentValue: 6166, color: '#378ADD', order: 1 },
@@ -10,51 +8,59 @@ export const DEFAULT_CATEGORIES: Category[] = [
   { id: 'internacional', label: 'Internacional',      targetPct: 0.10, currentValue: 1000, color: '#7F77DD', order: 5 },
 ];
 
-let dbInstance: IDBPDatabase<InvestDB> | null = null;
+const KEYS = {
+  categories: 'rebalancer_categories',
+  contributions: 'rebalancer_contributions',
+  initialized: 'rebalancer_initialized',
+};
 
-export async function initDB(): Promise<IDBPDatabase<InvestDB>> {
-  if (dbInstance) return dbInstance;
-
-  dbInstance = await openDB<InvestDB>('invest-rebalancer', 1, {
-    upgrade(db) {
-      const catStore = db.createObjectStore('categories', { keyPath: 'id' });
-      catStore.createIndex('by-order', 'order');
-      const contStore = db.createObjectStore('contributions', { keyPath: 'id' });
-      contStore.createIndex('by-date', 'date');
-      DEFAULT_CATEGORIES.forEach(cat => catStore.add(cat));
-    },
-  });
-
-  return dbInstance;
-}
-
-async function getDB() {
-  return initDB();
-}
-
-export async function getAllCategories(): Promise<Category[]> {
-  const db = await getDB();
-  const cats = await db.getAllFromIndex('categories', 'by-order');
-  return cats;
-}
-
-export async function updateCategory(cat: Category): Promise<void> {
-  const db = await getDB();
-  await db.put('categories', cat);
-}
-
-export async function updateCategoryValue(id: string, newValue: number): Promise<void> {
-  const db = await getDB();
-  const cat = await db.get('categories', id);
-  if (cat) {
-    cat.currentValue = newValue;
-    await db.put('categories', cat);
+function load<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
   }
 }
 
+function save<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    console.error('Erro ao salvar dados:', e);
+  }
+}
+
+export async function initDB(): Promise<void> {
+  const initialized = localStorage.getItem(KEYS.initialized);
+  if (!initialized) {
+    save(KEYS.categories, DEFAULT_CATEGORIES);
+    save(KEYS.contributions, []);
+    localStorage.setItem(KEYS.initialized, '1');
+  }
+}
+
+export async function getAllCategories(): Promise<Category[]> {
+  return load<Category[]>(KEYS.categories) ?? DEFAULT_CATEGORIES;
+}
+
+export async function updateCategory(cat: Category): Promise<void> {
+  const cats = await getAllCategories();
+  const updated = cats.map(c => c.id === cat.id ? cat : c);
+  save(KEYS.categories, updated);
+}
+
+export async function updateCategoryValue(id: string, newValue: number): Promise<void> {
+  const cats = await getAllCategories();
+  const updated = cats.map(c => c.id === id ? { ...c, currentValue: newValue } : c);
+  save(KEYS.categories, updated);
+}
+
 export async function saveContribution(contribution: Contribution): Promise<void> {
-  const db = await getDB();
-  await db.add('contributions', contribution);
+  const contributions = load<Contribution[]>(KEYS.contributions) ?? [];
+  contributions.push(contribution);
+  save(KEYS.contributions, contributions);
+
   for (const alloc of contribution.allocations) {
     if (alloc.amountToInvest > 0) {
       await updateCategoryValue(alloc.categoryId, alloc.currentBefore + alloc.amountToInvest);
@@ -63,29 +69,20 @@ export async function saveContribution(contribution: Contribution): Promise<void
 }
 
 export async function undoLastContribution(): Promise<boolean> {
-  const db = await getDB();
-  const all = await db.getAllFromIndex('contributions', 'by-date');
-  if (all.length === 0) return false;
+  const contributions = load<Contribution[]>(KEYS.contributions) ?? [];
+  if (contributions.length === 0) return false;
 
-  const last = all[all.length - 1];
+  const last = contributions[contributions.length - 1];
   for (const alloc of last.allocations) {
     await updateCategoryValue(alloc.categoryId, alloc.currentBefore);
   }
-  await db.delete('contributions', last.id);
+
+  contributions.pop();
+  save(KEYS.contributions, contributions);
   return true;
 }
 
 export async function getContributionsDesc(): Promise<Contribution[]> {
-  const db = await getDB();
-  const all = await db.getAllFromIndex('contributions', 'by-date');
-  return [...all].reverse();
-}
-
-export async function resetToDefaults(): Promise<void> {
-  const db = await getDB();
-  const tx = db.transaction('categories', 'readwrite');
-  for (const cat of DEFAULT_CATEGORIES) {
-    await tx.store.put(cat);
-  }
-  await tx.done;
+  const contributions = load<Contribution[]>(KEYS.contributions) ?? [];
+  return [...contributions].reverse();
 }
