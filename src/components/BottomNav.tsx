@@ -1,4 +1,4 @@
-import { PieChart, Calculator, History, Settings } from 'lucide-react';
+import { PieChart, Calculator, History, Settings, type LucideIcon } from 'lucide-react';
 import type { Screen } from '../types';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -7,7 +7,7 @@ interface Props {
   onNavigate: (s: Screen) => void;
 }
 
-const tabs: { id: Screen; label: string; Icon: React.FC<{ size?: number }> }[] = [
+const tabs: { id: Screen; label: string; Icon: LucideIcon }[] = [
   { id: 'dashboard',  label: 'Carteira',  Icon: PieChart },
   { id: 'rebalance',  label: 'Aportar',   Icon: Calculator },
   { id: 'history',    label: 'Histórico', Icon: History },
